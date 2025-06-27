@@ -1,216 +1,175 @@
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8">
-  <title>下落彈珠檯</title>
-  <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
-  <style>
-    body {
-      background: #f4f4f4;
-      font-family: sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 2rem;
-    }
-    #game {
-      position: relative;
-      width: 900px;
-      height: 900px;
-      border: 2px solid #333;
-      background: white;
-      overflow: hidden;
-      margin-top: 1rem;
-    }
-    canvas {
-      display: block;
-    }
-    #score-container, #money-container {
-      position: absolute;
-      top: 20px;
-      font-size: 25px;
-      z-index: 10;
-    }
-    #score-container {
-      right: 20px;
-    }
-    #money-container {
-      left: 20px;
-    }
-    input, button {
-      margin: 0.5rem;
-      padding: 0.5rem;
-      font-size: 1rem;
-    }
-  </style>
-  
-</head>
+import { useEffect, useRef, useState } from "react";
+import Matter from "matter-js";
 
-  
-  <script>
-    let autoDropInterval = null;
-    function toggleAutoDrop(button) {
-      if (autoDropInterval) {
-        clearInterval(autoDropInterval);
-        autoDropInterval = null;
-        button.textContent = "自動落珠";
-      } else {
-        autoDropInterval = setInterval(dropBall, 350);
-        button.textContent = "停止落珠";
+const slotLabels = [1000, 130, 26, 9, 4, 2, 0.2, 0.2, 0.2, 0.2, 2, 4, 9, 26, 130, 1000];
+
+function generatePegs(width, totalRows, pegSpacing, pegHeightScale, pegOffsetY, Bodies) {
+  const pegs = [];
+  for (let row = 0; row < totalRows; row++) {
+    if (row === 0) continue;
+    const pegsInRow = row + 1;
+    const rowWidth = (pegsInRow - 1) * pegSpacing;
+    const startX = width / 2 - rowWidth / 2;
+    for (let i = 0; i < pegsInRow; i++) {
+      const x = startX + i * pegSpacing;
+      const y = pegOffsetY + row * pegSpacing * pegHeightScale;
+      const peg = Bodies.circle(x, y, 5, {
+        isStatic: true,
+        render: { fillStyle: "#c0c0c0" },
+      });
+      pegs.push(peg);
+    }
+  }
+  return pegs;
+}
+
+function handleCollision(event, engineInstance, height, slotWidth, setScore, setActiveSlotIndex) {
+  event.pairs.forEach(({ bodyA, bodyB }) => {
+    [bodyA, bodyB].forEach(body => {
+      if (!body.circleRadius || body.circleRadius !== 10) return;
+      if (body.position.y > height - 30) {
+        const slotIndex = Math.floor(body.position.x / slotWidth);
+        const scoreValue = slotLabels[slotIndex] || 0;
+        setScore(prev => prev + scoreValue);
+        setActiveSlotIndex(slotIndex);
+        setTimeout(() => setActiveSlotIndex(null), 500);
+        Matter.World.remove(engineInstance.world, body);
       }
-    }
-  </script>
+    });
+  });
+}
 
-$1
-  <div style="display: flex; flex-direction: column; align-items: center;">
-  <input id="bet" type="number" placeholder="下注金額" />
-  <div style="display: flex; gap: 1rem; margin-top: 0.5rem;">
-    <button onclick="dropBall()">開始遊戲</button>
-    <button onclick="toggleAutoDrop(this)">自動落珠</button>
-  </div>
-</div>
-  <div id="game">
-    <div id="money-container">持有金額：<span id="money">5000</span></div>
-    <div id="score-container">得分：<span id="score">0</span></div>
-  </div>
+export default function PachinkoGame() {
+  const sceneRef = useRef(null);
+  const engine = useRef(Matter.Engine.create()).current;
+  const runner = useRef(Matter.Runner.create()).current;
+  const [score, setScore] = useState(0);
+  const [balance, setBalance] = useState(1000);
+  const [autoDrop, setAutoDrop] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [intervalMs, setIntervalMs] = useState(1000);
+  const [activeSlotIndex, setActiveSlotIndex] = useState(null);
 
-  <script>
-    const { Engine, Render, Runner, World, Bodies, Body, Events } = Matter;
+  useEffect(() => {
+    const { Engine, Render, World, Bodies, Events, Runner } = Matter;
+    const engineInstance = engine;
+    engineInstance.gravity.y = 1;
+    const width = 900;
+    const height = 850;
+    const totalRows = 19;
+    const pegSpacing = 45;
+    const pegHeightScale = 0.75;
+    const pegOffsetY = 25 + pegSpacing * pegHeightScale;
 
-    const engine = Engine.create();
-    engine.gravity.y = 1;
-    const world = engine.world;
-    const game = document.getElementById("game");
     const render = Render.create({
-      element: game,
-      engine: engine,
+      element: sceneRef.current,
+      engine: engineInstance,
       options: {
-        width: 900,
-        height: 900,
+        width,
+        height,
         wireframes: false,
-        background: 'white'
+        background: 'linear-gradient(to bottom, #1e3c72, #2a5298)'
       }
+    });
+
+    const pegs = generatePegs(width, totalRows, pegSpacing, pegHeightScale, pegOffsetY, Bodies);
+
+    const walls = [
+      Bodies.rectangle(width / 2, 0, width, 20, { isStatic: true }),
+      Bodies.rectangle(0, height / 2, 20, height, { isStatic: true }),
+      Bodies.rectangle(width, height / 2, 20, height, { isStatic: true }),
+      Bodies.rectangle(width / 2, height, width, 20, { isStatic: true })
+    ];
+
+    const slotWidth = width / slotLabels.length;
+    const slots = slotLabels.map((value, index) => ({ x: index * slotWidth + slotWidth / 2, score: value }));
+
+    const slotWalls = [];
+    for (let i = 0; i <= slotLabels.length; i++) {
+      const x = i * slotWidth;
+      slotWalls.push(Bodies.rectangle(x, height - 25, 10, 50, { isStatic: true }));
+    }
+
+    World.add(engineInstance.world, [...pegs, ...walls, ...slotWalls]);
+
+    Events.on(engineInstance, "collisionStart", (event) => {
+      handleCollision(event, engineInstance, height, slotWidth, setScore, setActiveSlotIndex);
     });
 
     Render.run(render);
-    const runner = Runner.create();
-    Runner.run(runner, engine);
+    Runner.run(runner, engineInstance);
 
-    // 釘子生成
-    const pegRows = 14;
-    const pegCols = 17;
-    const spacingX = 50;
-    const spacingY = 50;
-    for (let row = 0; row < pegRows; row++) {
-      for (let col = 0; col < pegCols; col++) {
-        const isOffset = row % 2 === 1;
-        const x = col * spacingX + (isOffset ? spacingX / 2 : 0) + 50;
-        const y = row * spacingY + 150;
-        const peg = Bodies.circle(x, y, 5, {
-          isStatic: true,
-          render: { fillStyle: '#666' }
-        });
-        World.add(world, peg);
-      }
-    }
+    return () => {
+      Matter.Render.stop(render);
+      Matter.Runner.stop(runner);
+      Matter.World.clear(engineInstance.world);
+      Matter.Engine.clear(engineInstance);
+      render.canvas.remove();
+      render.textures = {};
+    };
+  }, [engine, runner]);
 
-    // 地板與牆與得分區
-    const scoreZones = [
-      { x: 112.5, score: 0 },
-      { x: 225, score: 1 },
-      { x: 337.5, score: 3 },
-      { x: 450, score: 5 },
-      { x: 562.5, score: 10 },
-      { x: 675, score: 30 },
-      { x: 787.5, score: 50 },
-      { x: 900, score: 100 }
-    ];
+  useEffect(() => {
+    if (!autoDrop) return;
+    const interval = setInterval(() => {
+      requestAnimationFrame(() => dropBall());
+    }, intervalMs / speed);
+    return () => clearInterval(interval);
+  }, [autoDrop, speed, intervalMs]);
 
-    scoreZones.forEach(zone => {
-      const wall = Bodies.rectangle(zone.x, 890, 5, 100, {
-        isStatic: true,
-        render: { fillStyle: '#ccc' }
-      });
-      World.add(world, wall);
+  const dropBall = (x = 450) => {
+    if (balance <= 0) return;
+    const ball = Matter.Bodies.circle(x, 30, 10, {
+      restitution: 0.2,
+      frictionAir: 0.003,
+      friction: 0.05,
+      density: 0.002,
+      render: { fillStyle: "#ff4d4d" },
     });
+    Matter.World.add(engine.world, ball);
+    setBalance(prev => prev - 1);
+  };
 
-    Events.on(engine, 'collisionStart', function(event) {
-      event.pairs.forEach(pair => {
-        const { bodyA, bodyB } = pair;
-        [bodyA, bodyB].forEach(body => {
-          if (!body.isStatic && body.position.y > 850 && !body.scored) {
-            body.scored = true;
-            const scoreDisplay = document.getElementById("score");
-            const moneyDisplay = document.getElementById("money");
-            const bet = parseInt(document.getElementById("bet").value) || 0;
-            const x = body.position.x;
-            const zoneIndex = Math.floor(x / 112.5);
-            const zone = scoreZones[Math.min(zoneIndex, scoreZones.length - 1)];
-            const result = zone.score;
-
-            scoreDisplay.textContent = parseInt(scoreDisplay.textContent) + result;
-            moneyDisplay.textContent = parseInt(moneyDisplay.textContent) + result * bet;
-
-            const anim = document.createElement("div");
-            anim.className = "score-animation";
-            anim.textContent = `+${result}`;
-            Object.assign(anim.style, {
-              position: 'absolute',
-              top: '860px',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              fontSize: '2rem',
-              color: 'green',
-              opacity: '1',
-              transition: 'transform 1s ease, opacity 1s ease'
-            });
-            game.appendChild(anim);
-
-            const scoreRect = scoreDisplay.getBoundingClientRect();
-            const gameRect = game.getBoundingClientRect();
-            const offsetX = scoreRect.left - gameRect.left;
-            const offsetY = scoreRect.top - gameRect.top;
-            void anim.offsetWidth;
-            anim.style.transform = `translate(${offsetX - 20}px, ${offsetY - 860}px)`;
-            anim.style.opacity = '0';
-
-            setTimeout(() => {
-              anim.remove();
-              World.remove(world, body);
-            }, 300);
-          }
-        });
-      });
-    });
-
-    const walls = [
-      Bodies.rectangle(450, 0, 900, 10, { isStatic: true }),
-      Bodies.rectangle(450, 900, 900, 10, { isStatic: true }),
-      Bodies.rectangle(0, 450, 10, 900, { isStatic: true }),
-      Bodies.rectangle(900, 450, 10, 900, { isStatic: true })
-    ];
-    World.add(world, walls);
-
-    function dropBall() {
-      const scoreDisplay = document.getElementById("score");
-      const moneyDisplay = document.getElementById("money");
-      const betInput = document.getElementById("bet");
-      const bet = parseInt(betInput.value) || 0;
-      let currentMoney = parseInt(moneyDisplay.textContent);
-
-      if (bet <= 0 || bet > currentMoney) {
-        alert("請輸入有效的下注金額，且不得超過持有金額。");
-        return;
-      }
-
-      moneyDisplay.textContent = currentMoney - bet;
-
-      const ball = Bodies.circle(450, 50, 10, {
-        restitution: 0.6,
-        render: { fillStyle: 'crimson' }
-      });
-      World.add(world, ball);
-    }
-  </script>
-</body>
-</html>
+  return (
+    <div className="p-4 flex flex-col items-center gap-2">
+      <div className="text-center text-xl mb-2 font-bold">
+        得分: {score.toFixed(1)}｜餘額: {balance.toFixed(1)}
+      </div>
+      <div className="flex gap-2 mb-2">
+        <button className="bg-blue-600 text-white px-4 py-1 rounded shadow" onClick={() => dropBall()}>
+          投下彈珠
+        </button>
+        <button
+          className={`px-4 py-1 rounded shadow ${autoDrop ? 'bg-red-500 text-white' : 'bg-gray-300'}`}
+          onClick={() => setAutoDrop(!autoDrop)}
+        >
+          {autoDrop ? '停止連投' : '開始連投'}
+        </button>
+        <select
+          className="border px-2 py-1 rounded"
+          value={speed}
+          onChange={(e) => setSpeed(Number(e.target.value))}
+        >
+          <option value={3.8}>x2</option>
+          <option value={5}>x3</option>
+        </select>
+      </div>
+      <div className="relative">
+        <div ref={sceneRef} className="mx-auto"></div>
+        <div className="absolute bottom-0 left-0 w-full flex">
+          {slotLabels.map((label, idx) => (
+            <div
+              key={idx}
+              className={`text-center text-xs font-bold drop-shadow-sm transition-all duration-200 ${
+                activeSlotIndex === idx ? 'text-white bg-yellow-400' : 'text-yellow-300 bg-black/60'
+              }`}
+              style={{ width: `${100 / slotLabels.length}%`, paddingBottom: '4px' }}
+            >
+              <div className="rounded-md mx-auto py-0.5 px-0.5 w-fit text-xs">x{label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
